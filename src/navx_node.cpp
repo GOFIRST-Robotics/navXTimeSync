@@ -13,20 +13,31 @@
 #include <ros/ros.h>
 #include <sensor_msgs/Imu.h>
 #include <geometry_msgs/Point.h>
+#include "boost/array.hpp"
 
 // Native_Libs
 #include <string>
+#include <cmath>
 
 // Custom_Libs
 #include "ahrs/AHRS.h"
 
-#define DEG_TO_RAD ((2.0 * 3.14159) / 360.0)
-#define GRAVITY 9.81 // m/s^2, if we actually go to the moon remember to change this
+static const float DEG_TO_RAD = M_PI / 180;
+static const float GRAVITY = 9.81; // m/s^2, if we actually go to the moon remember to change this
 typedef struct {
   float ypr[3];
   float ang_vel[3];
   float accel[3];
-} Pose;
+} OrientationEntry;
+
+// Function Prototypes
+/**
+ * Calculates the covariance matrices based on the orientation history and stores the results in the provided arrays
+ * Returns true if the returned covariance is valid, otherwise false
+ */
+bool calculate_covariance(boost::array<double, 9> &orientation_mat, 
+                          boost::array<double, 9> &ang_vel_mat, 
+                          boost::array<double, 9> &accel_mat);
 
 // ROS Node and Publishers
 ros::NodeHandle * nh;
@@ -47,7 +58,7 @@ int covar_samples;
 // Global_Vars
 AHRS* com;
 int seq = 0;
-std::vector<Pose> poseHistory;
+std::vector<OrientationEntry> orientationHistory;
 
 int main(int argc, char** argv) {
   // Init ROS
@@ -64,7 +75,7 @@ int main(int argc, char** argv) {
 
   // Init IMU
   com = new AHRS(device_path);
-  poseHistory.resize(covar_samples);
+  orientationHistory.resize(covar_samples);
 
   // Subscribers
   ros::Timer update_timer = nh->createTimer(ros::Duration(1.0/frequency), update_callback);
@@ -77,18 +88,20 @@ int main(int argc, char** argv) {
   ros::spin();
 }
 
-void calculate_covariance(boost::array<double, 9> &orientation_mat, boost::array<double, 9> &ang_vel_mat, boost::array<double, 9> &accel_mat) {
+bool calculate_covariance(boost::array<double, 9> &orientation_mat, 
+                          boost::array<double, 9> &ang_vel_mat, 
+                          boost::array<double, 9> &accel_mat) {
   int count = std::min(seq-1, covar_samples);
   if (count < 2) {
-    return;
+    return false; // Did not calculate covariance
   }
-  Pose avg = {};
+  OrientationEntry avg = {};
   // Calculate averages
   for (int i = 0; i < count; i++) {
     for (int j = 0; j < 3; j++) {
-      avg.ypr[j] += poseHistory[i].ypr[j];
-      avg.ang_vel[j] += poseHistory[i].ang_vel[j];
-      avg.accel[j] += poseHistory[i].accel[j];
+      avg.ypr[j] += orientationHistory[i].ypr[j];
+      avg.ang_vel[j] += orientationHistory[i].ang_vel[j];
+      avg.accel[j] += orientationHistory[i].accel[j];
     }
   }
   for (int j = 0; j < 3; j++) {
@@ -97,6 +110,7 @@ void calculate_covariance(boost::array<double, 9> &orientation_mat, boost::array
     avg.accel[j] /= count;
   }
   // Calculate covariance
+  // See https://en.wikipedia.org/wiki/Covariance#Calculating_the_sample_covariance
   for (int x = 0; x < 3; x++) {
     for (int y = 0; y < 3; y++) {
       int idx = 3*x + y;
@@ -105,9 +119,9 @@ void calculate_covariance(boost::array<double, 9> &orientation_mat, boost::array
       accel_mat[idx] = 0;
       // Average mean error difference
       for (int i = 0; i < count; i++) {
-        orientation_mat[idx] += (poseHistory[i].ypr[x] - avg.ypr[x]) * (poseHistory[i].ypr[y] - avg.ypr[y]);
-        ang_vel_mat[idx] += (poseHistory[i].ang_vel[x] - avg.ang_vel[x]) * (poseHistory[i].ang_vel[y] - avg.ang_vel[y]);
-        accel_mat[idx] += (poseHistory[i].accel[x] - avg.accel[x]) * (poseHistory[i].accel[y] - avg.accel[y]);
+        orientation_mat[idx] += (orientationHistory[i].ypr[x] - avg.ypr[x]) * (orientationHistory[i].ypr[y] - avg.ypr[y]);
+        ang_vel_mat[idx] += (orientationHistory[i].ang_vel[x] - avg.ang_vel[x]) * (orientationHistory[i].ang_vel[y] - avg.ang_vel[y]);
+        accel_mat[idx] += (orientationHistory[i].accel[x] - avg.accel[x]) * (orientationHistory[i].accel[y] - avg.accel[y]);
       }
       // Normalize
       orientation_mat[idx] /= count - 1;
@@ -115,23 +129,23 @@ void calculate_covariance(boost::array<double, 9> &orientation_mat, boost::array
       accel_mat[idx] /= count - 1;
     }
   }
-
+  return true;
 }
 
 void update_callback(const ros::TimerEvent&) {
   // Calculate pose
-  Pose curPose;
-  curPose.ypr[0] = com->GetRoll() * DEG_TO_RAD;
-  curPose.ypr[1] = com->GetPitch() * DEG_TO_RAD;
-  curPose.ypr[2] = com->GetYaw() * DEG_TO_RAD;
-  curPose.ang_vel[0] = com->GetRollRate() * DEG_TO_RAD;
-  curPose.ang_vel[1] = com->GetPitchRate() * DEG_TO_RAD;
-  curPose.ang_vel[2] = com->GetYawRate() * DEG_TO_RAD;
-  curPose.accel[0] = com->GetWorldLinearAccelX() * GRAVITY;
-  curPose.accel[1] = com->GetWorldLinearAccelY() * GRAVITY;
-  curPose.accel[2] = com->GetWorldLinearAccelZ() * GRAVITY;
+  OrientationEntry curOrientation;
+  curOrientation.ypr[0] = com->GetRoll() * DEG_TO_RAD;
+  curOrientation.ypr[1] = com->GetPitch() * DEG_TO_RAD;
+  curOrientation.ypr[2] = com->GetYaw() * DEG_TO_RAD;
+  curOrientation.ang_vel[0] = com->GetRollRate() * DEG_TO_RAD;
+  curOrientation.ang_vel[1] = com->GetPitchRate() * DEG_TO_RAD;
+  curOrientation.ang_vel[2] = com->GetYawRate() * DEG_TO_RAD;
+  curOrientation.accel[0] = com->GetWorldLinearAccelX() * GRAVITY;
+  curOrientation.accel[1] = com->GetWorldLinearAccelY() * GRAVITY;
+  curOrientation.accel[2] = com->GetWorldLinearAccelZ() * GRAVITY;
 
-  poseHistory[seq % covar_samples] = curPose;
+  orientationHistory[seq % covar_samples] = curOrientation;
 
   // Publish IMU message
 
@@ -145,17 +159,20 @@ void update_callback(const ros::TimerEvent&) {
   msg.orientation.z = com->GetQuaternionZ();
   msg.orientation.w = com->GetQuaternionW();
   
-  msg.angular_velocity.x = curPose.ang_vel[0];
-  msg.angular_velocity.y = curPose.ang_vel[1];
-  msg.angular_velocity.z = curPose.ang_vel[2];
+  msg.angular_velocity.x = curOrientation.ang_vel[0];
+  msg.angular_velocity.y = curOrientation.ang_vel[1];
+  msg.angular_velocity.z = curOrientation.ang_vel[2];
   
-  msg.linear_acceleration.x = curPose.accel[0];
-  msg.linear_acceleration.y = curPose.accel[1];
-  msg.linear_acceleration.z = curPose.accel[2];
+  msg.linear_acceleration.x = curOrientation.accel[0];
+  msg.linear_acceleration.y = curOrientation.accel[1];
+  msg.linear_acceleration.z = curOrientation.accel[2];
 
-  calculate_covariance(msg.orientation_covariance, msg.angular_velocity_covariance, msg.linear_acceleration_covariance);
-  
-  imu_pub.publish(msg);
+  if (calculate_covariance(msg.orientation_covariance, 
+                           msg.angular_velocity_covariance, 
+                           msg.linear_acceleration_covariance)) {
+    // Only publish a message if we have a valid covariance
+    imu_pub.publish(msg);
+  }
 
   if (publish_euler) {
     // Publish Euler message
