@@ -2,11 +2,23 @@
  * navx_node.cpp
  * Runs the Kauai Labs NavX, using modified NavX library
  * VERSION: 1.0.0
- * Last changed: 2019-10-05
+ * Last changed: 2019-10-31
  * Authors: Jude Sauve <sauve031@umn.edu>
  * Maintainers: Nick Schatz <schat127@umn.edu>
  * MIT License
  * Copyright (c) 2019 UMN Robotics
+ */
+
+/* Interface: 
+ *  Pub: 
+ *   imu/data (sensor_msgs/Imu)
+ *   imu/euler (geometry_msgs/Point)
+ * Param: 
+ *   frequency (double) 50.0; The frequency of the read loop
+ *   publish_euler (bool) false; Whether to publish euler orientation
+ *   device_path (string) /dev/ttyACM0; The device serial port path
+ *   frame_id (string) imu_link; The Imu message header frame ID
+ *   covar_samples (int) 100; The number of samples to store to calculate covariance
  */
 
 // ROS Libs
@@ -22,8 +34,8 @@
 // Custom_Libs
 #include "ahrs/AHRS.h"
 
-static const float DEG_TO_RAD = M_PI / 180;
-static const float GRAVITY = 9.81; // m/s^2, if we actually go to the moon remember to change this
+static const float DEG_TO_RAD = M_PI / 180.0F;
+static const float GRAVITY = 9.81F; // m/s^2, if we actually go to the moon remember to change this
 typedef struct {
   float ypr[3];
   float ang_vel[3];
@@ -31,10 +43,6 @@ typedef struct {
 } OrientationEntry;
 
 // Function Prototypes
-/**
- * Calculates the covariance matrices based on the orientation history and stores the results in the provided arrays
- * Returns true if the returned covariance is valid, otherwise false
- */
 bool calculate_covariance(boost::array<double, 9> &orientation_mat, 
                           boost::array<double, 9> &ang_vel_mat, 
                           boost::array<double, 9> &accel_mat);
@@ -88,6 +96,10 @@ int main(int argc, char** argv) {
   ros::spin();
 }
 
+/**
+ * Calculates the covariance matrices based on the orientation history and stores the results in the provided arrays
+ * Returns true if the returned covariance is valid, otherwise false
+ */
 bool calculate_covariance(boost::array<double, 9> &orientation_mat, 
                           boost::array<double, 9> &ang_vel_mat, 
                           boost::array<double, 9> &accel_mat) {
