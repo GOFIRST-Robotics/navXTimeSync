@@ -1,8 +1,8 @@
 /*
  * navx_node.cpp
  * Runs the Kauai Labs NavX, using modified NavX library
- * VERSION: 1.0.0
- * Last changed: 2019-10-31
+ * VERSION: 1.1.0
+ * Last changed: 2019-11-01
  * Authors: Jude Sauve <sauve031@umn.edu>
  * Maintainers: Nick Schatz <schat127@umn.edu>
  * MIT License
@@ -11,11 +11,11 @@
 
 /* Interface: 
  *  Pub: 
- *   imu/data (sensor_msgs/Imu)
- *   imu/euler (geometry_msgs/Point)
+ *   imu_pub (sensor_msgs/Imu): "imu/data"
+ *   euler_pub (geometry_msgs/Point): "imu/euler"
  * Param: 
  *   frequency (double) 50.0; The frequency of the read loop
- *   publish_euler (bool) false; Whether to publish euler orientation
+ *   euler_pub (bool) false; Whether to publish euler orientation
  *   device_path (string) /dev/ttyACM0; The device serial port path
  *   frame_id (string) imu_link; The Imu message header frame ID
  *   covar_samples (int) 100; The number of samples to store to calculate covariance
@@ -34,19 +34,6 @@
 // Custom_Libs
 #include "ahrs/AHRS.h"
 
-static const float DEG_TO_RAD = M_PI / 180.0F;
-static const float GRAVITY = 9.81F; // m/s^2, if we actually go to the moon remember to change this
-typedef struct {
-  float ypr[3];
-  float ang_vel[3];
-  float accel[3];
-} OrientationEntry;
-
-// Function Prototypes
-bool calculate_covariance(boost::array<double, 9> &orientation_mat, 
-                          boost::array<double, 9> &ang_vel_mat, 
-                          boost::array<double, 9> &accel_mat);
-
 // ROS Node and Publishers
 ros::NodeHandle * nh;
 ros::NodeHandle * pnh;
@@ -58,15 +45,27 @@ void update_callback(const ros::TimerEvent&);
 
 // ROS Params
 double frequency;
-bool publish_euler;
+bool euler_enable;
 std::string device_path;
 std::string frame_id;
 int covar_samples;
+
+// Custom Types
+typedef struct {
+  float ypr[3];
+  float ang_vel[3];
+  float accel[3];
+} OrientationEntry;
 
 // Global_Vars
 AHRS* com;
 int seq = 0;
 std::vector<OrientationEntry> orientationHistory;
+static const float DEG_TO_RAD = M_PI / 180.0F;
+static const float GRAVITY = 9.81F; // m/s^2, if we actually go to the moon remember to change this
+bool calculate_covariance(boost::array<double, 9> &orientation_mat, 
+                          boost::array<double, 9> &ang_vel_mat, 
+                          boost::array<double, 9> &accel_mat);
 
 int main(int argc, char** argv) {
   // Init ROS
@@ -76,7 +75,7 @@ int main(int argc, char** argv) {
 
   // Params
   pnh->param<double>("frequency", frequency, 50.0);
-  pnh->param<bool>("publish_euler", publish_euler, false);
+  pnh->param<bool>("euler_enable", euler_enable, false);
   pnh->param<std::string>("device_path", device_path, "/dev/ttyACM0");
   pnh->param<std::string>("frame_id", frame_id, "imu_link");
   pnh->param<int>("covar_samples", covar_samples, 100);
@@ -145,7 +144,7 @@ bool calculate_covariance(boost::array<double, 9> &orientation_mat,
 }
 
 void update_callback(const ros::TimerEvent&) {
-  // Calculate pose
+  // Calculate orientation
   OrientationEntry curOrientation;
   curOrientation.ypr[0] = com->GetRoll() * DEG_TO_RAD;
   curOrientation.ypr[1] = com->GetPitch() * DEG_TO_RAD;
@@ -161,37 +160,37 @@ void update_callback(const ros::TimerEvent&) {
 
   // Publish IMU message
 
-  sensor_msgs::Imu msg;
-  msg.header.stamp = ros::Time::now();
-  msg.header.seq = seq++;
-  msg.header.frame_id = frame_id;
+  sensor_msgs::Imu imu_msg;
+  imu_msg.header.stamp = ros::Time::now();
+  imu_msg.header.seq = seq++;
+  imu_msg.header.frame_id = frame_id;
   
-  msg.orientation.x = com->GetQuaternionX();
-  msg.orientation.y = com->GetQuaternionY();
-  msg.orientation.z = com->GetQuaternionZ();
-  msg.orientation.w = com->GetQuaternionW();
+  imu_msg.orientation.x = com->GetQuaternionX();
+  imu_msg.orientation.y = com->GetQuaternionY();
+  imu_msg.orientation.z = com->GetQuaternionZ();
+  imu_msg.orientation.w = com->GetQuaternionW();
   
-  msg.angular_velocity.x = curOrientation.ang_vel[0];
-  msg.angular_velocity.y = curOrientation.ang_vel[1];
-  msg.angular_velocity.z = curOrientation.ang_vel[2];
+  imu_msg.angular_velocity.x = curOrientation.ang_vel[0];
+  imu_msg.angular_velocity.y = curOrientation.ang_vel[1];
+  imu_msg.angular_velocity.z = curOrientation.ang_vel[2];
   
-  msg.linear_acceleration.x = curOrientation.accel[0];
-  msg.linear_acceleration.y = curOrientation.accel[1];
-  msg.linear_acceleration.z = curOrientation.accel[2];
+  imu_msg.linear_acceleration.x = curOrientation.accel[0];
+  imu_msg.linear_acceleration.y = curOrientation.accel[1];
+  imu_msg.linear_acceleration.z = curOrientation.accel[2];
 
-  if (calculate_covariance(msg.orientation_covariance, 
-                           msg.angular_velocity_covariance, 
-                           msg.linear_acceleration_covariance)) {
+  if (calculate_covariance(imu_msg.orientation_covariance, 
+                           imu_msg.angular_velocity_covariance, 
+                           imu_msg.linear_acceleration_covariance)) {
     // Only publish a message if we have a valid covariance
-    imu_pub.publish(msg);
+    imu_pub.publish(imu_msg);
   }
 
-  if (publish_euler) {
+  if (euler_enable) {
     // Publish Euler message
-    geometry_msgs::Point euler;
-    euler.x = com->GetRoll();
-    euler.y = com->GetPitch();
-    euler.z = com->GetYaw();
-    euler_pub.publish(euler);
+    geometry_msgs::Point euler_msg;
+    euler_msg.x = com->GetRoll();
+    euler_msg.y = com->GetPitch();
+    euler_msg.z = com->GetYaw();
+    euler_pub.publish(euler_msg);
   }
 }
